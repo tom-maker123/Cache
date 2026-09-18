@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0E2B31">
+<title>New Baby Cache Hunt</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Karla:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   PALETTE — chart ink, gorse yellow, sea glass
+   ============================================================ */
+:root{
+  --ink:        #0E2B31;   /* deep chart teal, UI chrome */
+  --ink-soft:   #17434B;   /* raised surfaces */
+  --ink-line:   #2A5A62;   /* hairlines on dark */
+  --sand:       #EFE3C8;   /* chart paper */
+  --sand-dim:   #CFC3A8;
+  --gorse:      #E8B32C;   /* accent — the gorse on the cliffs */
+  --seaglass:   #6FB39A;   /* found */
+  --rust:       #C4553D;   /* lighthouse red, used once */
+  --paper:      #FBF7EE;
+
+  --sheet-w: 380px;
+  --ease: cubic-bezier(.22,.9,.28,1);
+}
+
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  background:var(--ink);
+  color:var(--sand);
+  font-family:"Karla",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--gorse);outline-offset:2px;border-radius:4px}
+
+/* ============================================================
+   MAP
+   ============================================================ */
+#map{position:fixed;inset:0;background:var(--ink)}
+/* tint the off-the-shelf tiles into the chart palette */
+.leaflet-tile-pane{
+  filter:grayscale(.55) sepia(.55) saturate(.7) hue-rotate(-10deg) brightness(1.06) contrast(.85);
+}
+.leaflet-container{background:#0E2B31;font-family:inherit}
+.leaflet-control-attribution{
+  background:rgba(14,43,49,.78);color:var(--sand-dim);
+  font-size:9px;font-family:"IBM Plex Mono",monospace;
+}
+.leaflet-control-attribution a{color:var(--sand)}
+.leaflet-control-zoom{border:0 !important;margin:0 14px 0 0 !important;
+  box-shadow:0 4px 16px rgba(0,0,0,.3);border-radius:10px;overflow:hidden}
+.leaflet-control-zoom a{
+  background:rgba(23,67,75,.94) !important;color:var(--sand) !important;
+  border:0 !important;border-bottom:1px solid var(--ink-line) !important;
+  width:34px;height:34px;line-height:33px;font-size:17px;font-weight:400;
+  backdrop-filter:blur(8px);
+}
+.leaflet-control-zoom a:last-child{border-bottom:0 !important}
+.leaflet-control-zoom a:hover{background:var(--ink-line) !important}
+.leaflet-top.leaflet-right{margin-top:calc(env(safe-area-inset-top) + 92px)}
+
+/* --- pins --- */
+.pin{width:34px;height:44px;position:relative;transition:transform .18s var(--ease)}
+.pin svg{display:block;filter:drop-shadow(0 3px 5px rgba(0,0,0,.45))}
+.pin:hover{transform:translateY(-3px) scale(1.05)}
+.pin.is-active{transform:translateY(-4px) scale(1.14)}
+.pin .body{fill:var(--gorse)}
+.pin .glyph{fill:var(--ink)}
+.pin.is-found .body{fill:var(--seaglass)}
+
+@keyframes ping{from{transform:scale(.4);opacity:.7}to{transform:scale(2.4);opacity:0}}
+.me-dot{width:16px;height:16px;border-radius:50%;background:var(--rust);
+  border:2.5px solid var(--paper);box-shadow:0 0 0 1px rgba(0,0,0,.3)}
+.me-dot::after{content:"";position:absolute;inset:-2px;border-radius:50%;
+  background:var(--rust);animation:ping 2.4s var(--ease) infinite}
+@media (prefers-reduced-motion:reduce){.me-dot::after{animation:none;opacity:0}}
+
+/* ============================================================
+   TOP BAR
+   ============================================================ */
+.topbar{
+  position:fixed;top:0;left:0;right:0;z-index:600;
+  padding:calc(env(safe-area-inset-top) + 14px) 16px 26px;
+  display:flex;align-items:flex-start;gap:14px;
+  background:linear-gradient(180deg,rgba(14,43,49,.94) 0%,rgba(14,43,49,.72) 55%,rgba(14,43,49,0) 100%);
+  pointer-events:none;
+}
+.topbar > *{pointer-events:auto}
+.brand h1{
+  margin:0;font-family:"Fraunces",Georgia,serif;font-weight:600;
+  font-size:22px;line-height:1.05;letter-spacing:-.015em;
+}
+.brand p{
+  margin:3px 0 0;font-family:"IBM Plex Mono",monospace;font-size:10.5px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--sand-dim);
+}
+.tally{margin-left:auto;display:flex;align-items:center;gap:9px;
+  background:rgba(23,67,75,.9);border:1px solid var(--ink-line);
+  border-radius:999px;padding:7px 13px 7px 8px;backdrop-filter:blur(8px)}
+.tally svg{display:block}
+.tally b{font-family:"IBM Plex Mono",monospace;font-size:13px;font-weight:500}
+.tally span{font-size:11px;color:var(--sand-dim)}
+
+/* ============================================================
+   VIEW SWITCH
+   ============================================================ */
+.switch{
+  position:fixed;z-index:600;left:50%;transform:translateX(-50%);
+  bottom:calc(env(safe-area-inset-bottom) + 20px);
+  display:flex;background:rgba(23,67,75,.94);border:1px solid var(--ink-line);
+  border-radius:999px;padding:4px;backdrop-filter:blur(10px);
+  box-shadow:0 6px 24px rgba(0,0,0,.35);
+  transition:opacity .25s var(--ease),transform .25s var(--ease);
+}
+.switch button{padding:8px 20px;border-radius:999px;font-size:13px;font-weight:500;color:var(--sand-dim)}
+.switch button[aria-pressed="true"]{background:var(--sand);color:var(--ink)}
+body.sheet-open .switch{opacity:0;transform:translate(-50%,26px);pointer-events:none}
+@media(min-width:820px){body.sheet-open .switch{opacity:1;transform:translateX(-50%);pointer-events:auto}}
+
+/* ============================================================
+   SHEET  (bottom sheet on phones, side card on desktop)
+   ============================================================ */
+.sheet{
+  position:fixed;z-index:700;left:0;right:0;bottom:0;
+  max-height:86vh;overflow-y:auto;overscroll-behavior:contain;
+  background:var(--paper);color:var(--ink);
+  border-radius:20px 20px 0 0;
+  box-shadow:0 -10px 40px rgba(0,0,0,.4);
+  transform:translateY(102%);
+  transition:transform .34s var(--ease);
+  padding-bottom:calc(env(safe-area-inset-bottom) + 22px);
+}
+.sheet.is-open{transform:translateY(0)}
+.grip{width:38px;height:4px;border-radius:99px;background:var(--sand-dim);margin:9px auto 0}
+
+@media(min-width:820px){
+  .sheet{
+    left:16px;right:auto;top:16px;bottom:16px;width:var(--sheet-w);
+    border-radius:16px;max-height:none;
+    transform:translateX(calc(-1 * (var(--sheet-w) + 32px)));
+    box-shadow:0 12px 44px rgba(0,0,0,.45);
+  }
+  .sheet.is-open{transform:translateX(0)}
+  .grip{display:none}
+}
+
+.sheet-inner{padding:16px 20px 0}
+.sheet-close{position:absolute;top:12px;right:12px;width:30px;height:30px;
+  border-radius:50%;background:rgba(14,43,49,.07);display:grid;place-items:center;font-size:16px;line-height:1}
+
+/* --- detail header --- */
+.code{font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.13em;
+  color:#6C7F80;text-transform:uppercase}
+.sheet h2{
+  margin:6px 0 2px;font-family:"Fraunces",Georgia,serif;font-weight:600;
+  font-size:26px;line-height:1.1;letter-spacing:-.02em;max-width:16ch;
+}
+.place{margin:0;font-size:13px;color:#5D7274}
+
+/* --- stats strip --- */
+.stats{display:flex;gap:0;margin:16px 0 0;border-block:1px solid rgba(14,43,49,.12)}
+.stat{flex:1;padding:10px 0}
+.stat + .stat{border-left:1px solid rgba(14,43,49,.12);padding-left:12px}
+.stat dt{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:#7B8C8D;margin:0 0 5px}
+.stat dd{margin:0;font-size:14px;font-weight:700}
+.stars{display:inline-block;position:relative;font-size:12.5px;letter-spacing:1px;color:rgba(14,43,49,.2)}
+.stars i{position:absolute;left:0;top:0;overflow:hidden;white-space:nowrap;color:var(--gorse);font-style:normal}
+
+/* --- distance --- */
+.dist{
+  display:flex;align-items:center;gap:10px;margin-top:14px;padding:11px 13px;
+  background:rgba(14,43,49,.05);border-radius:11px;font-size:13px;
+}
+.dist b{font-family:"IBM Plex Mono",monospace;font-size:15px;font-weight:500}
+.dist small{color:#5D7274;font-size:12px}
+.dist button{color:var(--ink);text-decoration:underline;text-underline-offset:3px;font-size:12.5px}
+
+/* --- prose --- */
+.sheet p.about{font-size:14.5px;line-height:1.55;margin:16px 0 0;color:#22474B}
+.note{
+  margin:14px 0 0;padding:13px 15px;border-left:2px solid var(--gorse);
+  background:rgba(232,179,44,.09);font-family:"Fraunces",Georgia,serif;
+  font-size:15px;line-height:1.5;font-style:italic;
+}
+
+/* --- hint (the decrypt moment) --- */
+.hint{margin:18px 0 0;border:1px dashed rgba(14,43,49,.28);border-radius:11px;padding:12px 14px}
+.hint-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.hint-head span{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.13em;
+  text-transform:uppercase;color:#7B8C8D}
+.hint-head button{font-size:12.5px;font-weight:700;color:var(--rust)}
+.hint p{margin:8px 0 0;font-family:"IBM Plex Mono",monospace;font-size:13px;
+  line-height:1.6;word-break:break-word}
+.hint.is-locked p{color:#8A9899}
+
+/* --- log --- */
+.log{margin:20px 0 0;padding-top:18px;border-top:1px solid rgba(14,43,49,.12)}
+.btn{
+  display:block;width:100%;padding:14px;border-radius:12px;text-align:center;
+  background:var(--ink);color:var(--paper);font-weight:700;font-size:15px;
+  transition:transform .12s var(--ease),background .2s;
+}
+.btn:active{transform:scale(.985)}
+.btn.ghost{background:none;color:#5D7274;font-weight:500;font-size:13px;padding:10px}
+.logform textarea{
+  width:100%;min-height:76px;resize:vertical;padding:12px;border-radius:11px;
+  border:1px solid rgba(14,43,49,.22);background:#fff;color:var(--ink);
+  font:inherit;font-size:14px;margin-bottom:10px;
+}
+.logform textarea::placeholder{color:#93A2A3}
+[hidden]{display:none !important}
+
+/* --- found stamp --- */
+.found{position:relative;text-align:center;padding:22px 0 6px}
+.stamp{
+  display:inline-block;border:2.5px solid var(--seaglass);color:var(--seaglass);
+  border-radius:8px;padding:7px 16px;font-family:"Fraunces",Georgia,serif;
+  font-weight:700;font-size:19px;letter-spacing:.05em;text-transform:uppercase;
+  transform:rotate(-7deg);opacity:.92;
+}
+@keyframes stamp-in{
+  0%{transform:rotate(-7deg) scale(2.6);opacity:0;filter:blur(3px)}
+  70%{transform:rotate(-7deg) scale(.94);opacity:1;filter:blur(0)}
+  100%{transform:rotate(-7deg) scale(1);opacity:.92}
+}
+.stamp.animate{animation:stamp-in .5s var(--ease)}
+@media (prefers-reduced-motion:reduce){.stamp.animate{animation:none}}
+.found .when{margin:12px 0 0;font-family:"IBM Plex Mono",monospace;font-size:11px;
+  letter-spacing:.1em;text-transform:uppercase;color:#7B8C8D}
+.found .entry{margin:8px auto 0;max-width:34ch;font-family:"Fraunces",Georgia,serif;
+  font-size:15.5px;line-height:1.5;color:#22474B}
+
+/* ============================================================
+   LIST VIEW
+   ============================================================ */
+.list{
+  position:fixed;inset:0;z-index:650;background:var(--ink);overflow-y:auto;
+  padding:calc(env(safe-area-inset-top) + 96px) 16px calc(env(safe-area-inset-bottom) + 96px);
+}
+.card{
+  display:flex;gap:14px;align-items:flex-start;width:100%;text-align:left;
+  padding:15px 4px;border-bottom:1px solid var(--ink-line);
+}
+.card:first-child{border-top:1px solid var(--ink-line)}
+.card .num{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--gorse);padding-top:4px}
+.card.done .num{color:var(--seaglass)}
+.card h3{margin:0;font-family:"Fraunces",Georgia,serif;font-size:17px;font-weight:600}
+.card p{margin:3px 0 0;font-size:12.5px;color:var(--sand-dim)}
+.card .meta{margin-left:auto;text-align:right;font-family:"IBM Plex Mono",monospace;
+  font-size:11px;color:var(--sand-dim);padding-top:4px;white-space:nowrap}
+.card.done h3{color:var(--seaglass)}
+</style>
+</head>
+
+<body>
+
+<div id="map" role="application" aria-label="Map of Jersey with hidden caches"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>New Baby Cache Hunt</h1>
+  </div>
+  <div class="tally" aria-live="polite">
+    <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
+      <circle cx="10" cy="10" r="8" fill="none" stroke="#2A5A62" stroke-width="3"/>
+      <circle id="ring" cx="10" cy="10" r="8" fill="none" stroke="#6FB39A" stroke-width="3"
+              stroke-linecap="round" stroke-dasharray="0 100" transform="rotate(-90 10 10)"
+              style="transition:stroke-dasharray .5s cubic-bezier(.22,.9,.28,1)"/>
+    </svg>
+    <b id="tallyNum">0/5</b><span>found</span>
+  </div>
+</header>
+
+<nav class="switch" aria-label="View">
+  <button id="tabMap" aria-pressed="true">Map</button>
+  <button id="tabList" aria-pressed="false">List</button>
+</nav>
+
+<section class="list" id="listView" hidden aria-label="All caches"></section>
+
+<aside class="sheet" id="sheet" role="dialog" aria-modal="false" aria-labelledby="cName" hidden>
+  <div class="grip"></div>
+  <button class="sheet-close" id="sheetClose" aria-label="Close">✕</button>
+  <div class="sheet-inner">
+    <div class="code" id="cCode"></div>
+    <h2 id="cName"></h2>
+    <p class="place" id="cPlace"></p>
+
+    <dl class="stats">
+      <div class="stat"><dt>Difficulty</dt><dd id="cDiff"></dd></div>
+      <div class="stat"><dt>Terrain</dt><dd id="cTerr"></dd></div>
+      <div class="stat"><dt>Size</dt><dd id="cSize"></dd></div>
+    </dl>
+
+    <div class="dist" id="distBox">
+      <span aria-hidden="true">📍</span>
+      <div><b id="distNum">—</b> <small id="distWord"></small></div>
+      <button id="locBtn" style="margin-left:auto">Use my location</button>
+    </div>
+
+    <p class="about" id="cAbout"></p>
+    <p class="note" id="cNote"></p>
+
+    <div class="hint is-locked" id="hintBox">
+      <div class="hint-head">
+        <span>Hint · encrypted</span>
+        <button id="hintBtn">Decrypt</button>
+      </div>
+      <p id="cHint"></p>
+    </div>
+
+    <div class="log">
+      <button class="btn" id="logBtn">Sign the logbook</button>
+
+      <div class="logform" id="logForm" hidden>
+        <textarea id="logText" placeholder="Write something in the log…"></textarea>
+        <button class="btn" id="logSave">Save entry</button>
+        <button class="btn ghost" id="logCancel">Cancel</button>
+      </div>
+
+      <div class="found" id="foundBox" hidden>
+        <div class="stamp" id="stamp">Found it</div>
+        <p class="when" id="foundWhen"></p>
+        <p class="entry" id="foundEntry"></p>
+        <button class="btn ghost" id="undoBtn">Remove this entry</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+/* ================================================================
+   ▼▼▼  EDIT EVERYTHING IN THIS BLOCK  ▼▼▼
+   Swap coordinates for your real hiding spots (right-click a spot
+   in Google Maps and it copies lat, lng straight to your clipboard).
+   ================================================================ */
+const CACHES = [
+  {
+    code: "BC1", name: "Dishoom Breakfast", place: "",
+    lat: 49.21846, lng: -2.05173,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Top floor bedroom — find this cache for a Dishoom-inspired breakfast naan.",
+    note: "",
+    hint: "I'm reading up on the recipe"
+  },
+  {
+    code: "BC2", name: "Scottish Breakfast", place: "",
+    lat: 49.21848, lng: -2.05192,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Lounge — find this cache for a Scottish breakfast roll.",
+    note: "",
+    hint: "I'm visiting Lewis and Harris"
+  },
+  {
+    code: "BC3", name: "All the Lego", place: "",
+    lat: 49.18522, lng: -2.10548,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "I'm where you swap pennies for Lego"
+  },
+  {
+    code: "BC4", name: "Bats About Bats", place: "",
+    lat: 49.20239, lng: -2.04138,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "I'm posted here"
+  },
+  {
+    code: "BC5", name: "Shiny Cars", place: "",
+    lat: 49.18052, lng: -2.08905,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "You may have to ask for help!"
+  },
+  {
+    code: "BC6", name: "Lemon Cakes", place: "",
+    lat: 49.20478, lng: -2.03344,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "It's all going down the drain"
+  },
+  {
+    code: "BC7", name: "Country Lanes 1", place: "",
+    lat: 49.21875, lng: -2.04791,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "I'm posted here"
+  },
+  {
+    code: "BC8", name: "Country Lanes 2", place: "",
+    lat: 49.21646, lng: -2.04411,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "I'll signpost the way"
+  },
+  {
+    code: "BC9", name: "Country Lanes 3", place: "",
+    lat: 49.21815, lng: -2.04027,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "Just hanging about"
+  },
+  {
+    code: "BC10", name: "Country Lanes 4", place: "",
+    lat: 49.22003, lng: -2.0423,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "Pipe dreams"
+  },
+  {
+    code: "BC11", name: "Country Lanes 5", place: "",
+    lat: 49.2202, lng: -2.04815,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "Don't speed!"
+  },
+  {
+    code: "BC12", name: "The Cheekiest Pinkie", place: "",
+    lat: 49.22999, lng: -2.07453,
+    difficulty: 2, terrain: 2, size: "Micro",
+    about: "Find me for a present!",
+    note: "",
+    hint: "Hiding in the wood(s)"
+  }
+];
+/* ================================================================
+   ▲▲▲  END OF THE BIT YOU EDIT  ▲▲▲
+   ================================================================ */
+
+/* ---------- storage: real file → localStorage, preview → memory ---------- */
+const KEY = "jersey-cache-hunt-v1";
+let memory = {};
+const store = {
+  read(){
+    try { return JSON.parse(localStorage.getItem(KEY)) || {}; }
+    catch(e){ return memory; }
+  },
+  write(v){
+    memory = v;
+    try { localStorage.setItem(KEY, JSON.stringify(v)); } catch(e){}
+  }
+};
+let logs = store.read();
+
+/* ---------- map ---------- */
+const map = L.map("map", { zoomControl:true, attributionControl:true })
+  .setView([49.215, -2.055], 13);
+map.zoomControl.setPosition("topright");
+
+/* ---------- basemap, with automatic failover ----------
+   Tile providers keep changing their terms:
+     · CARTO  — started stamping keyless tiles "API KEY REQUIRED" (Aug 2026)
+     · OSM    — now returns 403 unless the browser sends a Referer, which a
+                page opened from disk (file://) never does
+   Esri needs neither a key nor a referer, so it goes first. If a provider ever
+   fails, the app quietly drops to the next one in this list. */
+const BASEMAPS = [
+  {
+    name: "Esri Streets",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: 'Tiles &copy; Esri', maxZoom: 19
+  },
+  {
+    name: "Esri Topographic",
+    url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+    attribution: 'Tiles &copy; Esri', maxZoom: 19
+  },
+  {
+    /* works once the file is hosted at a real https address, not from disk */
+    name: "OpenStreetMap",
+    url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19, referrerPolicy: "strict-origin-when-cross-origin"
+  }
+];
+
+let baseLayer = null, baseIndex = -1;
+
+function useBasemap(i){
+  if (i >= BASEMAPS.length){ console.warn("No basemap provider available."); return; }
+  const cfg = BASEMAPS[i];
+  baseIndex = i;
+  if (baseLayer) map.removeLayer(baseLayer);
+
+  let errors = 0, ok = false;
+  baseLayer = L.tileLayer(cfg.url, {
+    maxZoom: cfg.maxZoom,
+    attribution: cfg.attribution,
+    referrerPolicy: cfg.referrerPolicy,
+    crossOrigin: true
+  });
+  baseLayer.on("tileload", () => { ok = true; });
+  baseLayer.on("tileerror", () => {
+    errors++;
+    if (!ok && errors >= 3){
+      console.warn(cfg.name + " tiles unavailable — trying " + (BASEMAPS[i+1]?.name || "nothing else"));
+      useBasemap(i + 1);
+    }
+  });
+  baseLayer.addTo(map);
+}
+
+useBasemap(0);
+
+map.fitBounds(CACHES.map(c => [c.lat, c.lng]), { padding:[70,90], maxZoom:15 });
+
+const pinSVG = `<svg width="34" height="44" viewBox="0 0 34 44">
+  <path class="body" d="M17 0C7.6 0 0 7.6 0 17c0 12 17 27 17 27s17-15 17-27C34 7.6 26.4 0 17 0z"/>
+  <path class="glyph" d="M17 7.5l2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3-5.8 3 1.1-6.5-4.7-4.6 6.5-.9z"/>
+</svg>`;
+
+/* two hides in the same building would stack; nudge duplicates a few metres */
+const seen = [];
+CACHES.forEach(c => {
+  c._lat = c.lat; c._lng = c.lng;
+  const clash = seen.filter(s => Math.abs(s.lat-c.lat) < 0.0004 && Math.abs(s.lng-c.lng) < 0.0004).length;
+  if (clash){ c._lat += 0.00022 * clash; c._lng += 0.00030 * clash; }
+  seen.push(c);
+});
+
+const markers = {};
+CACHES.forEach(c => {
+  const icon = L.divIcon({
+    className:"", html:`<div class="pin" data-code="${c.code}">${pinSVG}</div>`,
+    iconSize:[34,44], iconAnchor:[17,44]
+  });
+  const m = L.marker([c._lat, c._lng], { icon, keyboard:true, title:c.name })
+    .addTo(map).on("click", () => open(c.code));
+  markers[c.code] = m;
+});
+
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const rot13 = s => s.replace(/[a-z]/gi, ch => {
+  const b = ch <= "Z" ? 65 : 97;
+  return String.fromCharCode((ch.charCodeAt(0) - b + 13) % 26 + b);
+});
+const stars = n => {
+  const pct = (n / 5) * 100;
+  return `<span class="stars">★★★★★<i style="width:${pct}%">★★★★★</i></span>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:12px;margin-left:6px">${n}</span>`;
+};
+const metres = (a, b) => {
+  const R = 6371000, r = Math.PI/180;
+  const dLat = (b.lat-a.lat)*r, dLng = (b.lng-a.lng)*r;
+  const x = Math.sin(dLat/2)**2 + Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(x));
+};
+const pretty = m => m < 950 ? Math.round(m/10)*10 + " m" : (m/1000).toFixed(1) + " km";
+const warmth = m => m < 60 ? "You're right on top of it" :
+                    m < 250 ? "Very warm — start looking" :
+                    m < 1500 ? "Getting warm" : "Cold — keep walking";
+
+function refreshTally(){
+  const n = CACHES.filter(c => logs[c.code]).length;
+  $("tallyNum").textContent = `${n}/${CACHES.length}`;
+  $("ring").setAttribute("stroke-dasharray", `${(n/CACHES.length)*50.26} 100`);
+  CACHES.forEach(c => {
+    const el = markers[c.code].getElement()?.querySelector(".pin");
+    if (el) el.classList.toggle("is-found", !!logs[c.code]);
+  });
+}
+
+/* ---------- sheet ---------- */
+let current = null, decrypted = false;
+const sheet = $("sheet");
+
+function open(code){
+  const c = CACHES.find(x => x.code === code);
+  current = c; decrypted = false;
+
+  $("cCode").textContent = `${c.code} · Traditional cache`;
+  $("cName").textContent = c.name;
+  $("cPlace").textContent = c.place || "";
+  $("cPlace").hidden = !c.place;
+  $("cDiff").innerHTML = stars(c.difficulty);
+  $("cTerr").innerHTML = stars(c.terrain);
+  $("cSize").textContent = c.size;
+  $("cAbout").textContent = c.about;
+  $("cNote").textContent = c.note || "";
+  $("cNote").hidden = !c.note;
+
+  $("hintBox").classList.add("is-locked");
+  $("cHint").textContent = rot13(c.hint);
+  $("hintBtn").textContent = "Decrypt";
+
+  renderLog();
+  updateDistance();
+
+  document.querySelectorAll(".pin").forEach(p =>
+    p.classList.toggle("is-active", p.dataset.code === code));
+
+  sheet.hidden = false;
+  requestAnimationFrame(() => sheet.classList.add("is-open"));
+  document.body.classList.add("sheet-open");
+
+  if (window.innerWidth < 820) map.panTo([c._lat, c._lng], { animate:true });
+  else map.setView([c._lat, c._lng], Math.max(map.getZoom(), 16), { animate:true });
+}
+
+function close(){
+  sheet.classList.remove("is-open");
+  document.body.classList.remove("sheet-open");
+  document.querySelectorAll(".pin").forEach(p => p.classList.remove("is-active"));
+  setTimeout(() => { sheet.hidden = true; }, 340);
+  current = null;
+}
+$("sheetClose").onclick = close;
+document.addEventListener("keydown", e => { if (e.key === "Escape" && current) close(); });
+
+/* ---------- hint decrypt, letter by letter ---------- */
+$("hintBtn").onclick = () => {
+  if (!current) return;
+  if (decrypted){
+    decrypted = false;
+    $("hintBox").classList.add("is-locked");
+    $("cHint").textContent = rot13(current.hint);
+    $("hintBtn").textContent = "Decrypt";
+    return;
+  }
+  decrypted = true;
+  $("hintBox").classList.remove("is-locked");
+  $("hintBtn").textContent = "Re-encrypt";
+
+  const target = current.hint, node = $("cHint");
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches){
+    node.textContent = target; return;
+  }
+  let i = 0;
+  const tick = setInterval(() => {
+    i++;
+    node.textContent = target.slice(0, i) + rot13(target.slice(i));
+    if (i >= target.length) clearInterval(tick);
+  }, 22);
+};
+
+/* ---------- logbook ---------- */
+function renderLog(animate){
+  const entry = logs[current.code];
+  $("logBtn").hidden = !!entry;
+  $("logForm").hidden = true;
+  $("foundBox").hidden = !entry;
+  if (entry){
+    $("foundWhen").textContent = "Signed " + entry.date;
+    $("foundEntry").textContent = entry.text || "";
+    const s = $("stamp");
+    s.classList.remove("animate");
+    if (animate){ void s.offsetWidth; s.classList.add("animate"); }
+  }
+}
+$("logBtn").onclick = () => { $("logBtn").hidden = true; $("logForm").hidden = false; $("logText").focus(); };
+$("logCancel").onclick = () => { $("logForm").hidden = true; $("logBtn").hidden = false; };
+$("logSave").onclick = () => {
+  logs[current.code] = {
+    text: $("logText").value.trim(),
+    date: new Date().toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})
+  };
+  store.write(logs); $("logText").value = "";
+  renderLog(true); refreshTally(); paintList();
+};
+$("undoBtn").onclick = () => {
+  delete logs[current.code]; store.write(logs);
+  renderLog(); refreshTally(); paintList();
+};
+
+/* ---------- location ---------- */
+let me = null, meMarker = null;
+$("locBtn").onclick = startLocating;
+
+function startLocating(){
+  if (!navigator.geolocation){ $("distWord").textContent = "Location isn't available on this device"; return; }
+  $("locBtn").textContent = "Finding you…";
+  navigator.geolocation.watchPosition(pos => {
+    me = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    $("locBtn").hidden = true;
+    if (!meMarker){
+      meMarker = L.marker([me.lat, me.lng], {
+        icon: L.divIcon({ className:"", html:'<div class="me-dot"></div>', iconSize:[16,16], iconAnchor:[8,8] }),
+        interactive:false
+      }).addTo(map);
+    } else meMarker.setLatLng([me.lat, me.lng]);
+    updateDistance(); paintList();
+  }, () => {
+    $("locBtn").hidden = true;
+    $("distWord").textContent = "Location blocked — open the file on your phone to enable it";
+  }, { enableHighAccuracy:true, maximumAge:10000 });
+}
+
+function updateDistance(){
+  if (!current) return;
+  if (!me){ $("distNum").textContent = "—"; $("distWord").textContent = "distance unknown"; return; }
+  const d = metres(me, current);
+  $("distNum").textContent = pretty(d);
+  $("distWord").textContent = "away · " + warmth(d);
+}
+
+/* ---------- list view ---------- */
+function paintList(){
+  const rows = CACHES.map((c, i) => {
+    const done = !!logs[c.code];
+    const d = me ? pretty(metres(me, c)) : c.code;
+    return `<button class="card ${done?"done":""}" data-code="${c.code}">
+      <span class="num">${String(i+1).padStart(2,"0")}</span>
+      <span><h3>${c.name}</h3><p>${c.place || c.code}</p></span>
+      <span class="meta">${done ? "✓ found" : d}</span>
+    </button>`;
+  }).join("");
+  $("listView").innerHTML = rows;
+  $("listView").querySelectorAll(".card").forEach(b =>
+    b.onclick = () => { showMap(); open(b.dataset.code); });
+}
+
+function showMap(){
+  $("listView").hidden = true;
+  $("tabMap").setAttribute("aria-pressed","true");
+  $("tabList").setAttribute("aria-pressed","false");
+}
+$("tabMap").onclick = showMap;
+$("tabList").onclick = () => {
+  close(); paintList();
+  $("listView").hidden = false;
+  $("tabList").setAttribute("aria-pressed","true");
+  $("tabMap").setAttribute("aria-pressed","false");
+};
+
+/* ---------- go ---------- */
+map.whenReady(() => setTimeout(refreshTally, 60));
+paintList();
+</script>
+</body>
+</html>
